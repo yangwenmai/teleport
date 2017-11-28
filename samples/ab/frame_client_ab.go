@@ -19,18 +19,12 @@ func main() {
 	go tp.GraceSignal()
 	tp.SetShutdown(time.Second*20, nil, nil)
 	var cfg = &tp.PeerConfig{
-		TlsCertFile:          "",
-		TlsKeyFile:           "",
-		SlowCometDuration:    time.Millisecond * 500,
-		DefaultHeaderCodec:   "protobuf",
-		DefaultBodyCodec:     "protobuf",
-		DefaultBodyGzipLevel: 0,
-		PrintBody:            false,
+		DefaultBodyCodec: "protobuf",
 	}
 
 	var peer = tp.NewPeer(cfg)
 
-	var sess, err = peer.Dial("127.0.0.1:9090", "simple_server:9090")
+	var sess, err = peer.Dial("127.0.0.1:9090")
 	if err != nil {
 		tp.Panicf("%v", err)
 	}
@@ -57,9 +51,9 @@ func main() {
 					&pb.PbTest{A: 10, B: 2},
 					reply,
 				)
-				if pullcmd.Xerror != nil {
+				if pullcmd.Rerror() != nil {
 					atomic.AddUint32(&failNum, 1)
-					tp.Errorf("pull error: %v", pullcmd.Xerror.Error())
+					tp.Errorf("pull error: %v", pullcmd.Rerror())
 				}
 				count.Done()
 			}()

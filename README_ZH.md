@@ -9,23 +9,39 @@ Teleport是一个通用、高效、灵活的TCP Socket框架。
 
 官方QQ群：Go-Web 编程 42730308    [![Go-Web 编程群](http://pub.idqqimg.com/wpa/images/group.png)](http://jq.qq.com/?_wv=1027&k=fzi4p1)
 
-![teleport_server](https://github.com/henrylee2cn/teleport/raw/master/doc/teleport_server.png)
-<br>
+## 通信性能测试
 
-*AB Testing 1: [Mac 4CPU 8GB] [single-process single-conn] teleport: QPS 39414*
-![teleport_frame_client_ab_test](https://github.com/henrylee2cn/teleport/raw/master/doc/frame_client_ab.png)
-<br>
+- 测试环境
 
-*AB Testing 2: [Mac 4CPU 8GB] [single-process single-conn] teleport/socket: QPS 55419*
-![teleport_socket_client_ab_test](https://github.com/henrylee2cn/teleport/raw/master/doc/socket_client_ab.png)
+```
+darwin amd64 4CPU 8GB
+```
+
+- teleport-socket
+
+![tp_socket_benchmark](https://github.com/henrylee2cn/teleport/raw/develop/doc/tp_socket_benchmark.png)
+
+**[test code](https://github.com/henrylee2cn/rpc-benchmark/tree/master/teleport)**
+
+- 对比 rpcx
+
+![rpcx_benchmark](https://github.com/henrylee2cn/teleport/raw/develop/doc/rpcx_benchmark.jpg)
+
+**[test code](https://github.com/henrylee2cn/rpc-benchmark/tree/master/rpcx)**
+
+- 火焰图 teleport-socket
+
+![tp_socket_torch](https://github.com/henrylee2cn/teleport/raw/develop/doc/tp_socket_torch.png)
+
+**[svg file](https://github.com/henrylee2cn/teleport/raw/develop/doc/tp_socket_torch.svg)**
 
 ## 1. 版本
 
 版本 | 状态 | 分支
 --------|--------|--------
-v2      | release | [master](https://github.com/henrylee2cn/teleport/tree/master)
+v3      | release | [v3](https://github.com/henrylee2cn/teleport/tree/master)
+v2      | release | [v2](https://github.com/henrylee2cn/teleport/tree/v2)
 v1      | release | [v1](https://github.com/henrylee2cn/teleport/tree/v1)
-
 
 ## 2. 安装
 
@@ -36,31 +52,38 @@ go get -u github.com/henrylee2cn/teleport
 ## 3. 特性
 
 - 服务器和客户端之间对等通信，两者API方法基本一致
+- 支持定制通信协议
+- 可设置底层套接字读写缓冲区的大小
 - 底层通信数据包包含`Header`和`Body`两部分
-- 支持单独定制`Header`和`Body`编码类型，例如`JSON` `Protobuf`
-- `Body`支持gzip压缩
-- `Header`包含状态码及其描述文本
+- 支持单独定制`Header`和`Body`编码类型，例如`JSON` `Protobuf` `string`
+- 数据包`Header`包含与HTTP header相同格式的元信息
 - 支持推、拉、回复等通信模式
 - 支持插件机制，可以自定义认证、心跳、微服务注册中心、统计信息插件等
-- 无论服务器或客户端，均支持都优雅重启、优雅关闭
+- 无论服务器或客户端，均支持优雅重启、优雅关闭
 - 支持实现反向代理功能
 - 日志信息详尽，支持打印输入、输出消息的详细信息（状态码、消息头、消息体）
 - 支持设置慢操作报警阈值
-- 底层连接使用I/O缓冲区
 - 端点间通信使用I/O多路复用技术
+- 支持设置读取包的大小限制（如果超出则断开连接）
+- 提供Hander的上下文
 
 ## 4. 架构
 
 ### 4.1 名称解释
 
-- **Peer：**通信端点，可以是客户端或客户端
-- **Session：**连接会话，具有推、拉、回复、关闭等操作
-- **Context：**处理收到的或发送的数据包
-- **Pull-Launch：**从对端Peer拉数据
-- **Pull-Handle：**处理和回复对端Peer的拉请求
-- **Push-Launch：**将数据推送到对端Peer
-- **Push-Handle：**处理同伴的推送
-- **Router：**Handler注册路由
+- **Peer：** 通信端点，可以是客户端或客户端
+- **Session：** 连接会话，具有推、拉、回复、关闭等操作
+- **Context：** 处理收到的或发送的数据包
+- **Pull-Launch：** 从对端Peer拉数据
+- **Pull-Handle：** 处理和回复对端Peer的拉请求
+- **Push-Launch：** 将数据推送到对端Peer
+- **Push-Handle：** 处理同伴的推送
+- **Router：** Handler注册路由
+- **Packet：** 数据包对应的结构体
+- **Proto：** 数据包封包／解包的协议接口
+- **Codec：** 用于`Packet.Body`的序列化工具
+- **XferPipe：** 传输前对数据包数据进行一系列加工的管道
+- **XferFilter：** 一个在数据包传输前，对数据进行加工的接口
 
 ### 4.2 执行层次
 
@@ -68,56 +91,89 @@ go get -u github.com/henrylee2cn/teleport
 Peer -> Connection -> Socket -> Session -> Context
 ```
 
+### 4.3 数据包内容
 
-### 4.3 数据包
+每个数据包的内容如下:
+```go
+// in socket package
+type (
+    // Packet a socket data packet.
+    Packet struct {
+        // packet sequence
+        seq uint64
+        // packet type, such as PULL, PUSH, REPLY
+        ptype byte
+        // URL string
+        uri string
+        // metadata
+        meta *utils.Args
+        // body codec type
+        bodyCodec byte
+        // body object
+        body interface{}
+        // newBodyFunc creates a new body by packet type and URI.
+        // Note:
+        //  only for writing packet;
+        //  should be nil when reading packet.
+        newBodyFunc NewBodyFunc
+        // XferPipe transfer filter pipe, handlers from outer-most to inner-most.
+        // Note: the length can not be bigger than 255!
+        xferPipe *xfer.XferPipe
+        // packet size
+        size uint32
+        next *Packet
+    }
 
+    // NewBodyFunc creates a new body by header info.
+    NewBodyFunc func(seq uint64, ptype byte, uri string) interface{}
+)
+
+// in xfer package
+type (
+    // XferPipe transfer filter pipe, handlers from outer-most to inner-most.
+    // Note: the length can not be bigger than 255!
+    XferPipe struct {
+        filters []XferFilter
+    }
+    // XferFilter handles byte stream of packet when transfer.
+    XferFilter interface {
+        Id() byte
+        OnPack([]byte) ([]byte, error)
+        OnUnpack([]byte) ([]byte, error)
+    }
+)
 ```
-HeaderLength | HeaderCodecId | Header | BodyLength | BodyCodecId | Body
-```
 
-**注意：**
+### 4.4 通信协议
 
-- HeaderLength: uint32, 4 bytes, big endian
-- BodyLength: uint32, 4 bytes, big endian
-- HeaderCodecId: uint8, 1 byte
-- BodyCodecId: uint8, 1 byte
+支持通过接口定制自己的通信协议：
 
 ```go
-type Packet struct {
-    // HeaderCodec header codec name
-    HeaderCodec string `json:"header_codec"`
-    // BodyCodec body codec name
-    BodyCodec string `json:"body_codec"`
-    // header content
-    Header *Header `json:"header"`
-    // body content
-    Body interface{} `json:"body"`
-    // header length
-    HeaderLength int64 `json:"header_length"`
-    // body length
-    BodyLength int64 `json:"body_length"`
-    // HeaderLength + BodyLength
-    Length int64 `json:"length"`
-}
+type (
+    // Proto pack/unpack protocol scheme of socket packet.
+    Proto interface {
+        // Version returns the protocol's id and name.
+        Version() (byte, string)
+        // Pack pack socket data packet.
+        // Note: Make sure to write only once or there will be package contamination!
+        Pack(*Packet) error
+        // Unpack unpack socket data packet.
+        // Note: Concurrent unsafe!
+        Unpack(*Packet) error
+    }
+    ProtoFunc func(io.ReadWriter) Proto
+)
 ```
 
-### 4.4 头信息
+
+接着，你可以使用以下任意方式指定自己的通信协议：
 
 ```go
-type Header struct {
-    // Packet id
-    Id string
-    // Service type
-    Type int32
-    // Service URI
-    Uri string
-    // Body encoding type
-    Gzip int32
-    // As reply, it indicates the service status code
-    StatusCode int32
-    // As reply, it indicates the service status text
-    Status string
-}
+func SetDefaultProtoFunc(socket.ProtoFunc)
+func (*Peer) ServeConn(conn net.Conn, protoFunc ...socket.ProtoFunc) Session
+func (*Peer) DialContext(ctx context.Context, addr string, protoFunc ...socket.ProtoFunc) (Session, *Rerror)
+func (*Peer) Dial(addr string, protoFunc ...socket.ProtoFunc) (Session, *Rerror)
+func (*Peer) Listen(protoFunc ...socket.ProtoFunc) error
 ```
 
 ## 5. 用法
@@ -126,16 +182,14 @@ type Header struct {
 
 ```go
 var cfg = &tp.PeerConfig{
-    DefaultReadTimeout:   time.Minute * 3,
-    DefaultWriteTimeout:  time.Minute * 3,
-    TlsCertFile:          "",
-    TlsKeyFile:           "",
-    SlowCometDuration:    time.Millisecond * 500,
-    DefaultHeaderCodec:   "protobuf",
+    DefaultReadTimeout:  time.Minute * 5,
+    DefaultWriteTimeout: time.Millisecond * 500,
+    TlsCertFile:         "",
+    TlsKeyFile:          "",
+    SlowCometDuration:   time.Millisecond * 500,
     DefaultBodyCodec:     "json",
-    DefaultBodyGzipLevel: 5,
-    PrintBody:            true,
-    DefaultDialTimeout:   time.Second * 10,
+    PrintBody:           true,
+    CountTime:           true,
     ListenAddrs: []string{
         "0.0.0.0:9090",
     },
@@ -148,7 +202,7 @@ var peer = tp.NewPeer(cfg)
 peer.Listen()
 
 // It can also be used as a client at the same time
-var sess, err = peer.Dial("127.0.0.1:8080", "peerid-client")
+var sess, err = peer.Dial("127.0.0.1:8080")
 if err != nil {
     tp.Panicf("%v", err)
 }
@@ -163,7 +217,7 @@ type Home struct {
 }
 
 // Test handler
-func (h *Home) Test(args *[2]int) (int, tp.Xerror) {
+func (h *Home) Test(args *[2]int) (int, *tp.Rerror) {
     a := (*args)[0]
     b := (*args)[1]
     return a + b, nil
@@ -187,13 +241,13 @@ func (m *Msg) Test(args *map[string]interface{}) {
 - 定义处理未知拉取请求的操作
 
 ```go
-func UnknownPullHandle(ctx tp.UnknownPullCtx, body *[]byte) (interface{}, tp.Xerror) {
+func UnknownPullHandle(ctx tp.UnknownPullCtx, body *[]byte) (interface{}, *tp.Rerror) {
     var v interface{}
-    codecName, err := ctx.Unmarshal(*body, &v, true)
+    codecId, err := ctx.Unmarshal(*body, &v, true)
     if err != nil {
-        return nil, tp.NewXerror(0, err.Error())
+        return nil, tp.New*Rerror(0, err.Error())
     }
-    tp.Infof("receive unknown pull:\n codec: %s\n content: %#v", codecName, v)
+    tp.Infof("receive unknown pull:\n codec: %s\n content: %#v", codecId, v)
     return "this is reply string for unknown pull", nil
 }
 
@@ -204,11 +258,11 @@ func UnknownPullHandle(ctx tp.UnknownPullCtx, body *[]byte) (interface{}, tp.Xer
 ```go
 func UnknownPushHandle(ctx tp.UnknownPushCtx, body *[]byte) {
     var v interface{}
-    codecName, err := ctx.Unmarshal(*body, &v, true)
+    codecId, err := ctx.Unmarshal(*body, &v, true)
     if err != nil {
         tp.Errorf("%v", err)
     } else {
-        tp.Infof("receive unknown push:\n codec: %s\n content: %#v", codecName, v)
+        tp.Infof("receive unknown push:\n codec: %s\n content: %#v", codecId, v)
     }
 }
 ```
@@ -237,8 +291,8 @@ func (p *AliasPlugin) Name() string {
     return "AliasPlugin"
 }
 
-// PostReadHeader converts the alias of this service.
-func (p *AliasPlugin) PostReadHeader(ctx tp.ReadCtx) error {
+// PostReadPullHeader converts the alias of this service.
+func (p *AliasPlugin) PostReadPullHeader(ctx tp.ReadCtx) *tp.Rerror {
     var u = ctx.Input().Header.Uri
     if p.Aliases != nil {
         if a = p.Aliases[u]; a != "" {
@@ -274,6 +328,7 @@ aliasesPlugin.Alias("/alias", "/origin")
 package main
 
 import (
+    "encoding/json"
     "time"
 
     tp "github.com/henrylee2cn/teleport"
@@ -281,17 +336,17 @@ import (
 
 func main() {
     go tp.GraceSignal()
+    // tp.SetReadLimit(10)
     tp.SetShutdown(time.Second*20, nil, nil)
     var cfg = &tp.PeerConfig{
-        DefaultReadTimeout:   time.Minute * 3,
-        DefaultWriteTimeout:  time.Minute * 3,
-        TlsCertFile:          "",
-        TlsKeyFile:           "",
-        SlowCometDuration:    time.Millisecond * 500,
-        DefaultHeaderCodec:   "protobuf",
-        DefaultBodyCodec:     "json",
-        DefaultBodyGzipLevel: 5,
-        PrintBody:            true,
+        DefaultReadTimeout:  time.Minute * 5,
+        DefaultWriteTimeout: time.Millisecond * 500,
+        TlsCertFile:         "",
+        TlsKeyFile:          "",
+        SlowCometDuration:   time.Millisecond * 500,
+        DefaultBodyCodec:    "json",
+        PrintBody:           true,
+        CountTime:           true,
         ListenAddrs: []string{
             "0.0.0.0:9090",
             "0.0.0.0:9091",
@@ -312,7 +367,7 @@ type Home struct {
 }
 
 // Test handler
-func (h *Home) Test(args *map[string]interface{}) (map[string]interface{}, tp.Xerror) {
+func (h *Home) Test(args *map[string]interface{}) (map[string]interface{}, *tp.Rerror) {
     h.Session().Push("/push/test?tag=from home-test", map[string]interface{}{
         "your_id": h.Query().Get("peer_id"),
         "a":       1,
@@ -323,13 +378,20 @@ func (h *Home) Test(args *map[string]interface{}) (map[string]interface{}, tp.Xe
     }, nil
 }
 
-func UnknownPullHandle(ctx tp.UnknownPullCtx, body *[]byte) (interface{}, tp.Xerror) {
-    var v interface{}
-    codecName, err := ctx.Unmarshal(*body, &v, true)
+func UnknownPullHandle(ctx tp.UnknownPullCtx) (interface{}, *tp.Rerror) {
+    time.Sleep(1)
+    var v = struct {
+        ConnPort   int
+        RawMessage json.RawMessage
+        Bytes      []byte
+    }{}
+    codecId, err := ctx.Bind(&v)
     if err != nil {
-        return nil, tp.NewXerror(0, err.Error())
+        return nil, tp.NewRerror(1001, "bind error", err.Error())
     }
-    tp.Debugf("unmarshal body: codec: %s, content: %#v", codecName, v)
+    tp.Debugf("UnknownPullHandle: codec: %d, conn_port: %d, RawMessage: %s, bytes: %s",
+        codecId, v.ConnPort, v.RawMessage, v.Bytes,
+    )
     return []string{"a", "aa", "aaa"}, nil
 }
 ```
@@ -340,6 +402,7 @@ func UnknownPullHandle(ctx tp.UnknownPullCtx, body *[]byte) (interface{}, tp.Xer
 package main
 
 import (
+    "encoding/json"
     "time"
 
     tp "github.com/henrylee2cn/teleport"
@@ -349,35 +412,38 @@ func main() {
     go tp.GraceSignal()
     tp.SetShutdown(time.Second*20, nil, nil)
     var cfg = &tp.PeerConfig{
-        DefaultReadTimeout:   time.Minute * 3,
-        DefaultWriteTimeout:  time.Minute * 3,
-        TlsCertFile:          "",
-        TlsKeyFile:           "",
-        SlowCometDuration:    time.Millisecond * 500,
-        DefaultHeaderCodec:   "protobuf",
-        DefaultBodyCodec:     "json",
-        DefaultBodyGzipLevel: 5,
-        PrintBody:            false,
+        DefaultReadTimeout:  time.Minute * 5,
+        DefaultWriteTimeout: time.Millisecond * 500,
+        TlsCertFile:         "",
+        TlsKeyFile:          "",
+        SlowCometDuration:   time.Millisecond * 500,
+        DefaultBodyCodec:    "json",
+        PrintBody:           true,
+        CountTime:           true,
     }
 
     var peer = tp.NewPeer(cfg)
+    defer peer.Close()
     peer.PushRouter.Reg(new(Push))
 
     {
-        var sess, err = peer.Dial("127.0.0.1:9090", "simple_server:9090")
+        var sess, err = peer.Dial("127.0.0.1:9090")
         if err != nil {
-            tp.Panicf("%v", err)
+            tp.Fatalf("%v", err)
         }
 
         var reply interface{}
         var pullcmd = sess.Pull(
             "/group/home/test?peer_id=client9090",
-            map[string]interface{}{"conn_port": 9090},
+            map[string]interface{}{
+                "conn_port": 9090,
+                "bytes":     []byte("bytestest9090"),
+            },
             &reply,
         )
 
-        if pullcmd.Xerror != nil {
-            tp.Fatalf("pull error: %v", pullcmd.Xerror.Error())
+        if pullcmd.Rerror() != nil {
+            tp.Fatalf("pull error: %v", pullcmd.Rerror())
         }
         tp.Infof("9090reply: %#v", reply)
     }
@@ -391,12 +457,20 @@ func main() {
         var reply interface{}
         var pullcmd = sess.Pull(
             "/group/home/test_unknown?peer_id=client9091",
-            map[string]interface{}{"conn_port": 9091},
+            struct {
+                ConnPort   int
+                RawMessage json.RawMessage
+                Bytes      []byte
+            }{
+                9091,
+                json.RawMessage(`{"RawMessage":"test9091"}`),
+                []byte("bytes-test"),
+            },
             &reply,
         )
 
-        if pullcmd.Xerror != nil {
-            tp.Fatalf("pull error: %v", pullcmd.Xerror.Error())
+        if pullcmd.Rerror() != nil {
+            tp.Fatalf("pull error: %v", pullcmd.Rerror())
         }
         tp.Infof("9091reply test_unknown: %#v", reply)
     }

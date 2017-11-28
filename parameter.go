@@ -14,67 +14,85 @@
 
 package tp
 
-// Packet Header types
-const (
-	TypeUndefined int32 = 0
-	TypePull      int32 = 1
-	TypeReply     int32 = 2 // reply to pull
-	TypePush      int32 = 4
-	// TypeAuth      int32 = 5
-	// TypeHeartbeat int32 = 6
+import (
+	"bytes"
+	"unsafe"
+
+	"github.com/henrylee2cn/goutil"
+	"github.com/henrylee2cn/teleport/utils"
 )
 
-// Response Header status codes as registered with IANA.
+// Packet types
 const (
-	StatusWriteFailed = 100
-	StatusConnClosed  = 101
-
-	StatusOK = 200
-
-	StatusBadUri               = 400
-	StatusUnauthorized         = 401
-	StatusNotFound             = 404
-	StatusUnsupportedTx        = 410
-	StatusUnsupportedCodecType = 415
-	StatusFailedPlugin         = 424
-
-	StatusInternalServerError           = 500
-	StatusNotImplemented                = 501
-	StatusBadGateway                    = 502
-	StatusServiceUnavailable            = 503
-	StatusGatewayTimeout                = 504
-	StatusVariantAlsoNegotiates         = 506
-	StatusInsufficientStorage           = 507
-	StatusLoopDetected                  = 508
-	StatusNotExtended                   = 510
-	StatusNetworkAuthenticationRequired = 511
+	TypeUndefined byte = 0
+	TypePull      byte = 1
+	TypeReply     byte = 2 // reply to pull
+	TypePush      byte = 3
+	// TypeAuth      byte = 4
+	// TypeHeartbeat byte = 5
 )
 
-var statusText = map[int]string{
-	StatusWriteFailed:          "write failed",
-	StatusConnClosed:           "Connection Closed",
-	StatusOK:                   "OK",
-	StatusBadUri:               "Bad URI",
-	StatusUnauthorized:         "Unauthorized",
-	StatusNotFound:             "Not Found",
-	StatusUnsupportedTx:        "Unsupported transaction type",
-	StatusUnsupportedCodecType: "Unsupported codec type",
-	StatusFailedPlugin:         "Failed Plugin",
-
-	StatusInternalServerError:           "Internal Server Error",
-	StatusNotImplemented:                "Not Implemented",
-	StatusBadGateway:                    "Bad Gateway",
-	StatusServiceUnavailable:            "Service Unavailable",
-	StatusGatewayTimeout:                "Gateway Timeout",
-	StatusVariantAlsoNegotiates:         "Variant Also Negotiates",
-	StatusInsufficientStorage:           "Insufficient Storage",
-	StatusLoopDetected:                  "Loop Detected",
-	StatusNotExtended:                   "Not Extended",
-	StatusNetworkAuthenticationRequired: "Network Authentication Required",
+// TypeText returns the packet type text.
+// If the type is undefined returns 'Undefined'.
+func TypeText(typ byte) string {
+	switch typ {
+	case TypePull:
+		return "PULL"
+	case TypeReply:
+		return "REPLY"
+	case TypePush:
+		return "PUSH"
+	default:
+		return "Undefined"
+	}
 }
 
-// StatusText returns a text for the Response Header status code. It returns the empty
-// string if the code is unknown.
-func StatusText(code int) string {
-	return statusText[code]
+// Internal Framework Rerror code.
+// Note: Recommended custom code is greater than 1000.
+const (
+	CodeDialFailed     = 105
+	CodeConnClosed     = 102
+	CodeWriteFailed    = 104
+	CodeBadPacket      = 400
+	CodeNotFound       = 404
+	CodeNotImplemented = 501
+
+	// CodeConflict                      = 409
+	// CodeUnsupportedTx                 = 410
+	// CodeUnsupportedCodecType          = 415
+	// CodeUnauthorized                  = 401
+	// CodeInternalServerError           = 500
+	// CodeBadGateway                    = 502
+	// CodeServiceUnavailable            = 503
+	// CodeGatewayTimeout                = 504
+	// CodeVariantAlsoNegotiates         = 506
+	// CodeInsufficientStorage           = 507
+	// CodeLoopDetected                  = 508
+	// CodeNotExtended                   = 510
+	// CodeNetworkAuthenticationRequired = 511
+)
+
+// Internal Framework Rerror string.
+var (
+	rerror_dialFailed  = NewRerror(CodeDialFailed, "Dial Failed", "")
+	rerror_connClosed  = NewRerror(CodeConnClosed, "Connection Closed", "")
+	rerror_writeFailed = NewRerror(CodeWriteFailed, "Write Failed", "")
+)
+
+var (
+	// methodNotAllowed_metaSetting = metaSetting(NewRerror(405, "Type Not Allowed", "").String())
+	connClosed_metaSetting     = metaSetting(rerror_connClosed.String())
+	notFound_metaSetting       = metaSetting(NewRerror(CodeNotFound, "Not Found", "").String())
+	writeFailed_metaSetting    = metaSetting(rerror_writeFailed.String())
+	notImplemented_metaSetting = metaSetting(NewRerror(CodeNotImplemented, "Not Implemented", "").String())
+	badPacket_metaSetting      = metaSetting(NewRerror(CodeBadPacket, "Bad Packet", "").String())
+)
+
+type metaSetting string
+
+func (m metaSetting) Inject(meta *utils.Args, detail ...string) {
+	if len(detail) > 0 {
+		m = m[:len(m)-2] + metaSetting(bytes.Replace(goutil.StringToBytes(detail[0]), re_d, re_e, -1)) + m[len(m)-2:]
+	}
+	meta.Set(MetaRerrorKey, *(*string)(unsafe.Pointer(&m)))
 }

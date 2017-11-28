@@ -1,26 +1,25 @@
 package main
 
 import (
+	"encoding/json"
 	"time"
-
-	"github.com/json-iterator/go"
 
 	tp "github.com/henrylee2cn/teleport"
 )
 
 func main() {
 	go tp.GraceSignal()
+	// tp.SetReadLimit(10)
 	tp.SetShutdown(time.Second*20, nil, nil)
 	var cfg = &tp.PeerConfig{
-		DefaultReadTimeout:   time.Minute * 3,
-		DefaultWriteTimeout:  time.Minute * 3,
-		TlsCertFile:          "",
-		TlsKeyFile:           "",
-		SlowCometDuration:    time.Millisecond * 500,
-		DefaultHeaderCodec:   "protobuf",
-		DefaultBodyCodec:     "json",
-		DefaultBodyGzipLevel: 5,
-		PrintBody:            true,
+		DefaultReadTimeout:  time.Minute * 5,
+		DefaultWriteTimeout: time.Millisecond * 500,
+		TlsCertFile:         "",
+		TlsKeyFile:          "",
+		SlowCometDuration:   time.Millisecond * 500,
+		DefaultBodyCodec:    "json",
+		PrintBody:           true,
+		CountTime:           true,
 		ListenAddrs: []string{
 			"0.0.0.0:9090",
 			"0.0.0.0:9091",
@@ -41,30 +40,30 @@ type Home struct {
 }
 
 // Test handler
-func (h *Home) Test(args *map[string]interface{}) (map[string]interface{}, tp.Xerror) {
+func (h *Home) Test(args *map[string]interface{}) (map[string]interface{}, *tp.Rerror) {
 	h.Session().Push("/push/test?tag=from home-test", map[string]interface{}{
 		"your_id": h.Query().Get("peer_id"),
 		"a":       1,
 	})
-	// time.Sleep(10e9)
 	return map[string]interface{}{
 		"your_args":   *args,
 		"server_time": time.Now(),
 	}, nil
 }
 
-func UnknownPullHandle(ctx tp.UnknownPullCtx) (interface{}, tp.Xerror) {
+func UnknownPullHandle(ctx tp.UnknownPullCtx) (interface{}, *tp.Rerror) {
+	time.Sleep(1)
 	var v = struct {
-		ConnPort int
-		jsoniter.RawMessage
-		Bytes []byte
+		ConnPort   int
+		RawMessage json.RawMessage
+		Bytes      []byte
 	}{}
-	codecName, err := ctx.Bind(&v)
+	codecId, err := ctx.Bind(&v)
 	if err != nil {
-		return nil, tp.NewXerror(1, err.Error())
+		return nil, tp.NewRerror(1001, "bind error", err.Error())
 	}
-	tp.Debugf("UnknownPullHandle: codec: %s, conn_port: %d, RawMessage: %s, bytes: %s",
-		codecName, v.ConnPort, v.RawMessage, v.Bytes,
+	tp.Debugf("UnknownPullHandle: codec: %d, conn_port: %d, RawMessage: %s, bytes: %s",
+		codecId, v.ConnPort, v.RawMessage, v.Bytes,
 	)
 	return []string{"a", "aa", "aaa"}, nil
 }

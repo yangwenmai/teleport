@@ -1,35 +1,35 @@
 package main
 
 import (
+	"encoding/json"
 	"time"
 
-	"github.com/json-iterator/go"
-
 	tp "github.com/henrylee2cn/teleport"
+	"github.com/henrylee2cn/teleport/socket"
 )
 
 func main() {
 	go tp.GraceSignal()
 	tp.SetShutdown(time.Second*20, nil, nil)
 	var cfg = &tp.PeerConfig{
-		DefaultReadTimeout:   time.Minute * 3,
-		DefaultWriteTimeout:  time.Minute * 3,
-		TlsCertFile:          "",
-		TlsKeyFile:           "",
-		SlowCometDuration:    time.Millisecond * 500,
-		DefaultHeaderCodec:   "protobuf",
-		DefaultBodyCodec:     "json",
-		DefaultBodyGzipLevel: 5,
-		PrintBody:            false,
+		DefaultReadTimeout:  time.Minute * 5,
+		DefaultWriteTimeout: time.Millisecond * 500,
+		TlsCertFile:         "",
+		TlsKeyFile:          "",
+		SlowCometDuration:   time.Millisecond * 500,
+		DefaultBodyCodec:    "json",
+		PrintBody:           true,
+		CountTime:           true,
 	}
 
 	var peer = tp.NewPeer(cfg)
+	defer peer.Close()
 	peer.PushRouter.Reg(new(Push))
 
 	{
-		var sess, err = peer.Dial("127.0.0.1:9090", "simple_server:9090")
+		var sess, err = peer.Dial("127.0.0.1:9090")
 		if err != nil {
-			tp.Panicf("%v", err)
+			tp.Fatalf("%v", err)
 		}
 
 		var reply interface{}
@@ -40,10 +40,11 @@ func main() {
 				"bytes":     []byte("bytestest9090"),
 			},
 			&reply,
+			socket.WithXferPipe('g'),
 		)
 
-		if pullcmd.Xerror != nil {
-			tp.Fatalf("pull error: %v", pullcmd.Xerror.Error())
+		if pullcmd.Rerror() != nil {
+			tp.Fatalf("pull error: %v", pullcmd.Rerror())
 		}
 		tp.Infof("9090reply: %#v", reply)
 	}
@@ -58,19 +59,20 @@ func main() {
 		var pullcmd = sess.Pull(
 			"/group/home/test_unknown?peer_id=client9091",
 			struct {
-				ConnPort int
-				jsoniter.RawMessage
-				Bytes []byte
+				ConnPort   int
+				RawMessage json.RawMessage
+				Bytes      []byte
 			}{
 				9091,
-				jsoniter.RawMessage(`{"RawMessage":"test9091"}`),
+				json.RawMessage(`{"RawMessage":"test9091"}`),
 				[]byte("bytes-test"),
 			},
 			&reply,
+			socket.WithXferPipe('g'),
 		)
 
-		if pullcmd.Xerror != nil {
-			tp.Fatalf("pull error: %v", pullcmd.Xerror.Error())
+		if pullcmd.Rerror() != nil {
+			tp.Fatalf("pull error: %v", pullcmd.Rerror())
 		}
 		tp.Infof("9091reply test_unknown: %#v", reply)
 	}

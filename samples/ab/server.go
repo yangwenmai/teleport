@@ -17,13 +17,7 @@ func main() {
 	go tp.GraceSignal()
 	tp.SetShutdown(time.Second*20, nil, nil)
 	var cfg = &tp.PeerConfig{
-		TlsCertFile:          "",
-		TlsKeyFile:           "",
-		SlowCometDuration:    time.Millisecond * 500,
-		DefaultHeaderCodec:   "protobuf",
-		DefaultBodyCodec:     "protobuf",
-		DefaultBodyGzipLevel: 0,
-		PrintBody:            false,
+		DefaultBodyCodec: "protobuf",
 		ListenAddrs: []string{
 			"0.0.0.0:9090",
 		},
@@ -42,7 +36,7 @@ type Home struct {
 }
 
 // Test handler
-func (h *Home) Test(args *pb.PbTest) (*pb.PbTest, tp.Xerror) {
+func (h *Home) Test(args *pb.PbTest) (*pb.PbTest, *tp.Rerror) {
 	return &pb.PbTest{
 		A: args.A + args.B,
 		B: args.A - args.B,
